@@ -66,5 +66,6 @@ export function resizeRenderer(
 
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
-  renderer.setDrawingBufferSize(width, height, devicePixelRatio);
+  renderer.setPixelRatio(devicePixelRatio);
+  renderer.setSize(width, height);
 }
