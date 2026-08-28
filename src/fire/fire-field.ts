@@ -4,7 +4,7 @@ import { CustomEase } from "gsap/CustomEase";
 import { gsap } from "gsap/gsap-core";
 import * as THREE from "three/webgpu";
 import { createInstancedBillboard } from "./billboard";
-import { GROUND_LEVEL_Y } from "./environment";
+import { GROUND_LEVEL_Y } from "../scene/floor";
 import {
   createFireParticleSystem,
   type FireParticleEmitter,
@@ -17,7 +17,7 @@ gsap.registerPlugin(CustomEase, CustomBounce);
 
 /**
  * 同時に用意する飛ぶ火元の数。1以上の整数。増やすほど粒とライトの処理が増える。
- * 中央の点光源を足した数が、renderer.tsの点光源上限以下になるようにする。
+ * 中央の点光源を足した数が、クラスターライティングの点光源上限以下になるようにする。
  */
 const FLYING_FIRE_SOURCE_COUNT = 100;
 

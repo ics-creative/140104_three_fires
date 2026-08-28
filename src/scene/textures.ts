@@ -1,28 +1,16 @@
 import * as THREE from "three/webgpu";
-import fireParticleBlurredUrl from "./imgs/fire_particle.png";
-import fireParticleSharpUrl from "./imgs/fire_particle_sharp.png";
-import floorColorUrl from "./imgs/floor_diffuse.jpg";
-import floorNormalUrl from "./imgs/floor_normal.jpg";
-import floorSpecularUrl from "./imgs/floor_specular.jpg";
-import fireFlareUrl from "./imgs/lens_frare.png";
-import nearFireFlareUrl from "./imgs/lens_frare_active.png";
-
-/** 床と火元が共有するY座標。0が原点で、負数は原点より下。 */
-export const GROUND_LEVEL_Y = -300;
-
-/** 正方形の床の一辺。3D空間の単位で0より大きくする。0なら床は見えない。 */
-const FLOOR_WORLD_SIZE = 18_000;
+import fireParticleBlurredUrl from "../assets/fire_particle.png";
+import fireParticleSharpUrl from "../assets/fire_particle_sharp.png";
+import floorColorUrl from "../assets/floor_diffuse.jpg";
+import floorNormalUrl from "../assets/floor_normal.jpg";
+import floorSpecularUrl from "../assets/floor_specular.jpg";
+import fireFlareUrl from "../assets/lens_frare.png";
+import nearFireFlareUrl from "../assets/lens_frare_active.png";
 
 /** 床画像を一辺に並べる回数。0より大きくする。1なら画像を1枚だけ貼り、小数も使える。 */
 const FLOOR_TEXTURE_REPEAT_COUNT = 24;
 
-/** 床の反射色へ掛ける明るさ。0以上。0なら反射せず、1超はHDRとして強く光る。 */
-const FLOOR_SPECULAR_BRIGHTNESS = 8;
-
-/** 床に映る光の輪郭の細さ。0以上。大きいほど細く、0へ近いほど広くなる。 */
-const FLOOR_SHININESS = 40;
-
-type SceneTextures = {
+export type SceneTextures = {
   /** 床の色を描く画像。 */
   floorColor: THREE.Texture;
 
@@ -88,26 +76,4 @@ export function loadSceneTextures(): SceneTextures {
     fireFlare,
     nearFireFlare,
   };
-}
-
-/** loadSceneTexturesの戻り値から、GROUND_LEVEL_Yへ水平に置く床を作る。 */
-export function createFloor(textures: SceneTextures) {
-  const material = new THREE.MeshPhongMaterial({
-    map: textures.floorColor,
-    normalMap: textures.floorNormal,
-    specularMap: textures.floorSpecular,
-    specular: new THREE.Color().setRGB(
-      FLOOR_SPECULAR_BRIGHTNESS,
-      FLOOR_SPECULAR_BRIGHTNESS,
-      FLOOR_SPECULAR_BRIGHTNESS,
-    ),
-    shininess: FLOOR_SHININESS,
-  });
-  const floor = new THREE.Mesh(
-    new THREE.PlaneGeometry(FLOOR_WORLD_SIZE, FLOOR_WORLD_SIZE),
-    material,
-  );
-  floor.position.y = GROUND_LEVEL_Y;
-  floor.rotation.x = -Math.PI / 2;
-  return floor;
 }

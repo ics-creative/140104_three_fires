@@ -1,8 +1,9 @@
 import * as THREE from "three/webgpu";
-import { createCameraController } from "./camera-controller";
-import { createFloor, loadSceneTextures } from "./environment";
-import { createFireField } from "./fire";
-import { createSceneRenderer, resizeRenderer } from "./renderer";
+import { createFireField } from "./fire/fire-field";
+import { createCameraController } from "./scene/camera-controller";
+import { createFloor } from "./scene/floor";
+import { createSceneRenderer, resizeRenderer } from "./scene/renderer";
+import { loadSceneTextures } from "./scene/textures";
 import "./styles.css";
 
 /** 霧を始める距離と、完全にする距離。3D空間で0以上、nearはfar未満にする。 */
