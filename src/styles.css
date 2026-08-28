@@ -24,3 +24,29 @@ body {
 #scene:active {
   cursor: grabbing;
 }
+
+.wireframe-toggle {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 1;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 12px;
+  color: #fff;
+  font-family: sans-serif;
+  font-size: 10px;
+  line-height: 1.2;
+  cursor: pointer;
+  user-select: none;
+  background: rgb(0 0 0 / 70%);
+  border-radius: 4px;
+
+  input {
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    accent-color: #ff6a2a;
+  }
+}

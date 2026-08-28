@@ -4,6 +4,7 @@ import { createCameraController } from "./scene/camera-controller";
 import { createFloor } from "./scene/floor";
 import { createSceneRenderer, resizeRenderer } from "./scene/renderer";
 import { loadSceneTextures } from "./scene/textures";
+import { setupWireframeToggle } from "./scene/wireframe-toggle";
 import "./styles.css";
 
 /** 霧を始める距離と、完全にする距離。3D空間で0以上、nearはfar未満にする。 */
@@ -30,6 +31,7 @@ const FLOOR_AMBIENT_LIGHT_INTENSITY = 0.7;
 const MAX_FRAME_DELTA_SECONDS = 0.05;
 
 const canvas = document.querySelector<HTMLCanvasElement>("#scene")!;
+const wireframeToggle = document.querySelector<HTMLInputElement>("#wireframe-toggle")!;
 const renderer = createSceneRenderer(canvas);
 
 const scene = new THREE.Scene();
@@ -57,6 +59,7 @@ const updateFireField = createFireField(scene, camera, {
   sourceFlareTexture: sceneTextures.fireFlare,
   nearFlareTexture: sceneTextures.nearFireFlare,
 });
+setupWireframeToggle(scene, wireframeToggle);
 const frameTimer = new THREE.Timer();
 
 function resizeViewport() {
