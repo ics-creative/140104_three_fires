@@ -22,7 +22,7 @@ CustomBounce.create(EASE_VERTICAL_BOUNCE, { strength: 0.7, endAtStart: true });
  * secDeltaMinは0以上、speedResetThresholdは0より大きい値を使う。
  */
 const FLIGHT = {
-  numSources: 100,
+  numSources: 75,
   secFlight: 3,
   secIgnition: 0.2,
   secParticleFade: 0.3,
@@ -40,8 +40,8 @@ const FLIGHT = {
  * 描画順は粒＜通常フレア＜横長フレア。
  */
 const FLARE_SOURCE = {
-  size: 240,
-  brightness: 10,
+  size: 120,
+  brightness: 20,
   rangeOpacity: [0.8, 1],
   renderOrder: 2,
 } as const;
