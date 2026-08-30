@@ -2,84 +2,62 @@ import * as THREE from "three/webgpu";
 import { createFireField } from "./fire/fire-field";
 import { createCameraController } from "./scene/camera-controller";
 import { createFloor } from "./scene/floor";
-import { createSceneRenderPipeline } from "./scene/render-pipeline";
-import { createSceneRenderer, resizeRenderer } from "./scene/renderer";
-import { loadSceneTextures } from "./scene/textures";
-import { setupWireframeToggle } from "./scene/wireframe-toggle";
+import { createRenderPipeline } from "./scene/render-pipeline";
+import { createRenderer } from "./scene/renderer";
+import { loadTextures } from "./scene/textures";
 import "./styles.css";
 
-/** 霧を始める距離と、完全にする距離。3D空間で0以上、nearはfar未満にする。 */
-const FOG_NEAR_DISTANCE = 1_000;
-const FOG_FAR_DISTANCE = 8_000;
-
-/** カメラが縦に見渡す角度。度数で0より大きく180未満にする。 */
-const CAMERA_FIELD_OF_VIEW_DEGREES = 70;
-
-/** 描画する手前と奥の距離。nearは0より大きく、farはnearより大きくする。 */
-const CAMERA_NEAR_DISTANCE = 20;
-const CAMERA_FAR_DISTANCE = 20_000;
-
-/** 床全体へ回す光の色。RGBは0以上で、0ならその色なし、1超ならHDR。 */
-const FLOOR_LIGHT_COLOR = new THREE.Color().setRGB(0.6, 0.2, 0);
-
-/** 上から床へ当てる光の強さ。0以上。0なら消灯し、決まった上限はない。 */
-const FLOOR_LIGHT_INTENSITY = 1.4;
-
-/** 床の暗い部分を持ち上げる光の強さ。0以上。0なら消灯し、決まった上限はない。 */
-const FLOOR_AMBIENT_LIGHT_INTENSITY = 0.7;
-
-/** 1フレームでカメラと粒を進める上限秒数。0より大きくする。0なら時間更新が止まる。 */
-const MAX_FRAME_DELTA_SECONDS = 0.05;
-
+/** 床用ライトの色。RGB各成分は0以上で、1を超える値はHDRの高輝度として扱う。 */
+const COLOR_FLOOR_LIGHT = new THREE.Color().setRGB(0.6, 0.2, 0);
 const canvas = document.querySelector<HTMLCanvasElement>("#scene")!;
-const wireframeToggle = document.querySelector<HTMLInputElement>("#wireframe-toggle")!;
-const renderer = createSceneRenderer(canvas);
+const renderer = createRenderer(canvas);
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x000000);
-scene.fog = new THREE.Fog(0x000000, FOG_NEAR_DISTANCE, FOG_FAR_DISTANCE);
+// Fogの開始距離は1,000、終了距離は8,000。
+scene.fog = new THREE.Fog(0x000000, 1_000, 8_000);
+// 縦方向の視野角は70度。nearは20、farは20,000。
+const camera = new THREE.PerspectiveCamera(70, 1, 20, 20_000);
+const updateCamera = createCameraController(camera, canvas);
 
-const camera = new THREE.PerspectiveCamera(
-  CAMERA_FIELD_OF_VIEW_DEGREES,
-  1,
-  CAMERA_NEAR_DISTANCE,
-  CAMERA_FAR_DISTANCE,
-);
-const updateCameraPosition = createCameraController(camera, canvas);
+const textures = loadTextures();
+scene.add(createFloor(textures));
 
-const sceneTextures = loadSceneTextures();
-scene.add(createFloor(sceneTextures));
+// 平行光で床の反射を作り、環境光で影側へ赤みを加える。
+const lightFloor = new THREE.DirectionalLight(COLOR_FLOOR_LIGHT, 1.4);
+lightFloor.position.set(0, 1_000, -100);
+scene.add(lightFloor, new THREE.AmbientLight(COLOR_FLOOR_LIGHT, 0.7));
 
-const floorLight = new THREE.DirectionalLight(FLOOR_LIGHT_COLOR, FLOOR_LIGHT_INTENSITY);
-floorLight.position.set(0, 1_000, -100);
-const floorAmbientLight = new THREE.AmbientLight(FLOOR_LIGHT_COLOR, FLOOR_AMBIENT_LIGHT_INTENSITY);
-scene.add(floorLight, floorAmbientLight);
-
-const updateFireField = createFireField(scene, camera, {
-  particleTextures: sceneTextures.fireParticles,
-  sourceFlareTexture: sceneTextures.fireFlare,
-  nearFlareTexture: sceneTextures.nearFireFlare,
+const updateFire = createFireField(scene, camera, textures);
+const inputWireframe = document.querySelector<HTMLInputElement>("#wireframe-toggle")!;
+inputWireframe.addEventListener("change", () => {
+  scene.traverse((object) => {
+    if (!(object instanceof THREE.Mesh) || Array.isArray(object.material)) return;
+    // 床はMeshPhongMaterial、粒とフレアはMeshBasicMaterial。
+    Object.assign(object.material, { wireframe: inputWireframe.checked, needsUpdate: true });
+  });
 });
-setupWireframeToggle(scene, wireframeToggle);
-const renderPipeline = createSceneRenderPipeline(renderer, scene, camera);
-const frameTimer = new THREE.Timer();
+const pipeline = createRenderPipeline(renderer, scene, camera);
+const timer = new THREE.Timer();
 
-function resizeViewport() {
-  resizeRenderer(renderer, camera, window.innerWidth, window.innerHeight, window.devicePixelRatio);
+/** ウィンドウサイズとdevicePixelRatioをカメラとcanvasに反映する。 */
+function resize() {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setSize(window.innerWidth, window.innerHeight);
 }
 
-function renderFrame() {
-  frameTimer.update();
-  const deltaSeconds = Math.min(frameTimer.getDelta(), MAX_FRAME_DELTA_SECONDS);
+function render() {
+  timer.update();
+  // 1フレームの経過時間は最大0.05秒。タブ復帰時の移動量を抑える。
+  const secDelta = Math.min(timer.getDelta(), 0.05);
 
-  updateCameraPosition(deltaSeconds);
-
-  // フレアの向きと距離判定に今のカメラ行列を使うため、炎より先に更新する。
+  updateCamera(secDelta);
+  // カメラ行列の更新後にフレアの向きと距離を計算する。
   camera.updateMatrixWorld();
-  updateFireField(deltaSeconds);
-  renderPipeline.render();
+  updateFire(secDelta);
+  pipeline.render();
 }
-
-resizeViewport();
-window.addEventListener("resize", resizeViewport);
-await renderer.setAnimationLoop(renderFrame);
+resize();
+window.addEventListener("resize", resize);
+await renderer.setAnimationLoop(render);

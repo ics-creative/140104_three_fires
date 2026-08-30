@@ -1,44 +1,24 @@
 import * as THREE from "three/webgpu";
-import type { SceneTextures } from "./textures";
+import type { TextureSet } from "./textures";
 
 /** 床と火元が共有するY座標。0が原点で、負数は原点より下。 */
-export const GROUND_LEVEL_Y = -300;
-
-/** 正方形の床の一辺。3D空間の単位で0より大きくする。0なら床は見えない。 */
-const FLOOR_WORLD_SIZE = 18_000;
-
-/** 床の一辺を分ける数。1以上の整数。増やすほど格子が細かくなり、頂点数も増える。 */
-const FLOOR_SEGMENT_COUNT = 96;
-
-/** 床の反射色へ掛ける明るさ。0以上。0なら反射せず、1超はHDRとして強く光る。 */
-const FLOOR_SPECULAR_BRIGHTNESS = 8;
-
-/** 床に映る光の輪郭の細さ。0以上。大きいほど細く、0へ近いほど広くなる。 */
-const FLOOR_SHININESS = 40;
+export const Y_GROUND = -300;
 
 /** 読み込んだ床画像から、火元と同じ高さに置く床を作る。 */
-export function createFloor(textures: SceneTextures) {
-  const material = new THREE.MeshPhongMaterial({
-    map: textures.floorColor,
-    normalMap: textures.floorNormal,
-    specularMap: textures.floorSpecular,
-    specular: new THREE.Color().setRGB(
-      FLOOR_SPECULAR_BRIGHTNESS,
-      FLOOR_SPECULAR_BRIGHTNESS,
-      FLOOR_SPECULAR_BRIGHTNESS,
-    ),
-    shininess: FLOOR_SHININESS,
-  });
+export function createFloor(textures: TextureSet) {
+  // 18,000×18,000の床を96×96に分割する。分割数がワイヤーフレームの密度になる。
   const floor = new THREE.Mesh(
-    new THREE.PlaneGeometry(
-      FLOOR_WORLD_SIZE,
-      FLOOR_WORLD_SIZE,
-      FLOOR_SEGMENT_COUNT,
-      FLOOR_SEGMENT_COUNT,
-    ),
-    material,
+    new THREE.PlaneGeometry(18_000, 18_000, 96, 96),
+    // specularはHDR反射の強さ、shininessは反射の鋭さを決める。
+    new THREE.MeshPhongMaterial({
+      map: textures.textureFloorColor,
+      normalMap: textures.textureFloorNormal,
+      specularMap: textures.textureFloorSpecular,
+      specular: new THREE.Color().setScalar(8),
+      shininess: 40,
+    }),
   );
-  floor.position.y = GROUND_LEVEL_Y;
+  floor.position.y = Y_GROUND;
   floor.rotation.x = -Math.PI / 2;
   return floor;
 }

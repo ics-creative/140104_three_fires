@@ -1,478 +1,260 @@
 import { CustomBounce } from "gsap/CustomBounce";
 import { CustomEase } from "gsap/CustomEase";
-// 3Dの位置と炎の明るさだけを動かすため、GSAPの基本機能だけを読み込む。
 import { gsap } from "gsap/gsap-core";
 import * as THREE from "three/webgpu";
-import { createInstancedBillboard } from "./billboard";
-import { GROUND_LEVEL_Y } from "../scene/floor";
-import {
-  createFireParticleSystem,
-  type FireParticleEmitter,
-  type FireParticleTextures,
-} from "./fire-particles";
-import { createRandomNumberGenerator } from "./random";
+import { Y_GROUND } from "../scene/floor";
+import type { TextureSet } from "../scene/textures";
+import { createBillboards } from "./billboard";
+import { createParticleSystem, type ParticleEmitter } from "./fire-particles";
 
-// CustomBounceは内部でCustomEaseを使う。登録と曲線の作成は起動時に一度だけ行う。
+// CustomBounceとCustomEaseを登録し、火元のY座標に使うバウンス曲線を作る。
 gsap.registerPlugin(CustomEase, CustomBounce);
-
+const EASE_VERTICAL_BOUNCE = "sourceVerticalBounce";
+// endAtStart=trueで曲線の開始値と終了値をそろえる。strengthは0より大きく1以下で、大きいほど跳ね返り回数が増える。
+CustomBounce.create(EASE_VERTICAL_BOUNCE, { strength: 0.7, endAtStart: true });
 /**
- * 同時に用意する飛ぶ火元の数。1以上の整数。増やすほど粒とライトの処理が増える。
- * 中央の点光源を足した数が、クラスターライティングの点光源上限以下になるようにする。
+ * 飛ぶ火元の数、軌道、時間を設定する。numSourcesは0以上の整数。
+ * secFlightは0より大きく、secIgnition・secParticleFade・secLightFadeは0以上の秒数。
+ * secParticleFadeとsecLightFadeの上限はsecFlight。値を下げると着地直前まで粒と光が残る。
+ * rangeで始まる値は[最小値,最大値)。最小値≦最大値で、rangeSecDelayは0以上の秒数。
+ * 乱数は起動時に火元ごとに決まり、各周回で再利用する。
+ * numSourcesを増やすと粒とライトの数が増える。総ライト数はClusteredLightingの上限以下にする。
+ * secDeltaMinは0以上、speedResetThresholdは0より大きい値を使う。
  */
-const FLYING_FIRE_SOURCE_COUNT = 100;
-
-/** 火元が飛び始めてから、床で跳ね返りを終えるまでの秒数。0より大きくする。 */
-const SOURCE_FLIGHT_DURATION_SECONDS = 3.0;
-
-/** 火元が飛び始めるまでの待ち時間。秒で0以上。0ならすぐ飛び始める。 */
-const getRandomSourceLaunchDelaySeconds = createRandomNumberGenerator({
-  rangeMin: 0,
-  startValue: 0,
-  addRange: 6,
-});
-
-/** フレアとライトを暗くする秒数。0以上、飛行時間以下。0なら一瞬で消える。 */
-const SOURCE_LIGHT_AND_FLARE_FADE_DURATION_SECONDS = 1;
-
-/** 新しく出す粒を0へ減らす秒数。0以上、飛行時間以下。0なら一瞬で止める。 */
-const SOURCE_PARTICLE_SPAWN_REDUCTION_DURATION_SECONDS = 0.3;
-
-/** 火元が点灯するときに明るくなる秒数。0以上。0なら一瞬で点灯する。 */
-const SOURCE_IGNITION_DURATION_SECONDS = 0.2;
-
-/** 横長フレアの高さ判定。Y座標がSTART以下なら消え、END以上なら完全に出る。STARTはEND未満。 */
-const STREAK_FLARE_HEIGHT_FADE_START = 180;
-const STREAK_FLARE_HEIGHT_FADE_END = 320;
-
-/** 横長フレアが現れる前方距離。START以下で消え、END以上で完全に出る。STARTはEND未満。 */
-const STREAK_FLARE_DEPTH_FADE_IN_START = 120;
-const STREAK_FLARE_DEPTH_FADE_IN_END = 220;
-
-/** 横長フレアが消える前方距離。STARTから薄くなり、END以上で消える。STARTはEND未満。 */
-const STREAK_FLARE_DEPTH_FADE_OUT_START = 650;
-const STREAK_FLARE_DEPTH_FADE_OUT_END = 850;
-
+const FLIGHT = {
+  numSources: 100,
+  secFlight: 3,
+  secIgnition: 0.2,
+  secParticleFade: 0.3,
+  secLightFade: 1,
+  rangeSecDelay: [0, 6],
+  rangePeakHeight: [200, 700],
+  rangeLanding: [-1_500, 1_500],
+  secDeltaMin: 0.0001,
+  speedResetThreshold: 5_000,
+} as const;
 /**
- * 横長フレアを出せる火元を、何個おきに選ぶか。
- * 1以上、火元の数以下の整数を使う。1ならすべてで、大きいほど候補が減る。
+ * 通常フレアと横長フレアの表示設定。sizeとbrightnessは0以上、rangeOpacityは0〜1。
+ * 各rangeは最小値≦最大値。横長フレアは高さと手前距離で現れ、奥側で薄くなる。
+ * intervalCandidateは1以上の整数で、大きいほど候補が減る。maxVisibleは0以上の整数で、同時表示数の上限になる。
+ * 描画順は粒＜通常フレア＜横長フレア。
  */
-const STREAK_FLARE_CANDIDATE_STEP = 3;
-
+const FLARE_SOURCE = {
+  size: 240,
+  brightness: 10,
+  rangeOpacity: [0.8, 1],
+  renderOrder: 2,
+} as const;
+const FLARE_STREAK = {
+  size: 720,
+  brightness: 2,
+  rangeOpacity: [0.6, 1],
+  renderOrder: 3,
+  intervalCandidate: 3,
+  maxVisible: 5,
+  rangeHeight: [180, 320],
+  rangeDepthIn: [120, 220],
+  rangeDepthOut: [650, 850],
+} as const;
 /**
- * 1画面に同時表示できる横長フレアの最大数。
- * 0以上の整数を使う。0なら非表示。候補数より大きくしても表示数は増えない。
+ * 中央ライトと飛ぶライトの設定。距離・高さ・強さは0以上。強さが1を超えるとHDRの高輝度になる。
+ * rateFadeInは0より大きく、値を上げると中央ライトが早く点く。
+ * 飛ぶライトの強さ倍率は乱数から求め、上限を1とする。乱数範囲の最大値を1より大きくすると、
+ * 倍率1の割合が増える。乱数範囲は最小値≦最大値。
  */
-const STREAK_FLARE_MAX_VISIBLE_COUNT = 5;
-
-/** 通常フレアの幅。3D空間で0以上。0なら見えず、負数は使わない。 */
-const SOURCE_FLARE_WORLD_SIZE = 240;
-
-/** 横長フレアの幅。3D空間で0以上。0なら見えず、負数は使わない。 */
-const NEAR_FLARE_WORLD_SIZE = 720;
-
-/** 通常フレアへ掛けるHDR倍率。0で消え、1が元の明るさ。1超も使え、上限補正はしない。 */
-const FLYING_SOURCE_FLARE_HDR_BRIGHTNESS = 10;
-
-/** 横長フレアへ掛けるHDR倍率。0で消え、1が元の明るさ。1超も使え、上限補正はしない。 */
-const NEAR_FLARE_HDR_BRIGHTNESS = 2;
-
-/** 横長フレア画像の高さ。画像のpx数で1以上の整数にする。 */
-const NEAR_FLARE_TEXTURE_HEIGHT_PIXELS = 512;
-
-/**
- * 横長フレア画像から使う縦範囲。0〜画像の高さのpx数を使う。
- * TOPをBOTTOMより大きくすると、切り出した画像を上下反転して貼る。
- */
-const NEAR_FLARE_VISIBLE_TOP_PIXELS = 512;
-const NEAR_FLARE_VISIBLE_BOTTOM_PIXELS = 336;
-const NEAR_FLARE_TEXTURE_V_START = NEAR_FLARE_VISIBLE_TOP_PIXELS / NEAR_FLARE_TEXTURE_HEIGHT_PIXELS;
-const NEAR_FLARE_TEXTURE_V_END =
-  NEAR_FLARE_VISIBLE_BOTTOM_PIXELS / NEAR_FLARE_TEXTURE_HEIGHT_PIXELS;
-
-/** 火元が上がる最高地点のY座標。床以上にする。 */
-const getRandomSourcePeakHeight = createRandomNumberGenerator({
-  rangeMin: GROUND_LEVEL_Y,
-  startValue: 200,
-  addRange: 500,
-});
-
-/** 火元が着地するX・Z座標。3D空間の距離。 */
-const getRandomSourceLandingPosition = createRandomNumberGenerator({
-  startValue: -1_500,
-  addRange: 3_000,
-});
-
-/**
- * Y方向の動きに付ける名前。strengthは0〜1で、大きいほど跳ねる回数が増える。
- * 1本のTweenで床から上がり、同じ床へ戻す。
- */
-const SOURCE_VERTICAL_BOUNCE_EASE_NAME = "sourceVerticalBounce";
-CustomBounce.create(SOURCE_VERTICAL_BOUNCE_EASE_NAME, {
-  strength: 0.7,
-  endAtStart: true,
-});
-
-/** この秒数以下の移動は速度を0とみなす。0以上にする。 */
-const SOURCE_VELOCITY_DELTA_MIN_SECONDS = 0.0001;
-
-/** この速さを超える移動は中央への瞬間移動とみなし、速度を0にする。0より大きくする。 */
-const SOURCE_TELEPORT_SPEED_WORLD_UNITS_PER_SECOND = 5_000;
-
-/** 中央ライトが1秒で増える明るさ。0以上。0なら点灯せず、大きいほど早く最大になる。 */
-const CENTER_LIGHT_FADE_IN_PER_SECOND = 6;
-
-/** 通常フレアの透明度。0〜1。0で透明、1で不透明。 */
-const getRandomSourceFlareOpacity = createRandomNumberGenerator({
-  rangeMin: 0,
-  rangeMax: 1,
-  startValue: 0.8,
-  addRange: 0.2,
-});
-
-/** 横長フレアの透明度。0〜1。0で透明、1で不透明。 */
-const getRandomNearFlareOpacity = createRandomNumberGenerator({
-  rangeMin: 0,
-  rangeMax: 1,
-  startValue: 0.6,
-  addRange: 0.4,
-});
-
-/** 炎が床へ映すライト色。24bitのRGB値で指定する。 */
-const FIRE_LIGHT_COLOR = 0xff6622;
-
-/** 飛ぶ火元の光が届く距離。3D空間で0以上。0なら距離の上限を付けない。 */
-const getRandomFlyingFireLightDistance = createRandomNumberGenerator({
-  rangeMin: 0,
-  startValue: 1_100,
-  addRange: 40,
-});
-
-/** 中央ライトが届く距離。3D空間で0以上。0なら距離の上限を付けない。 */
-const CENTER_FIRE_LIGHT_DISTANCE = 1_100;
-
-/** 火元の明るさ倍率。0〜1。0で消灯、1で元の明るさ。 */
-const getRandomFlyingFireLightIntensityScale = createRandomNumberGenerator({
-  rangeMin: 0,
-  rangeMax: 1,
-  startValue: 0.8,
-  addRange: 0.3,
-});
-
-/** 飛ぶライトを火元から上へずらす距離。3D空間で0以上。0なら火元と同じ高さ。 */
-const FLYING_FIRE_LIGHT_HEIGHT = 16;
-
-/** 中央ライトを床から上へずらす距離。3D空間で0以上。0なら床と同じ高さ。 */
-const CENTER_FIRE_LIGHT_HEIGHT = 80;
-
-/** 中央ライトの強さ。0以上。0なら消灯し、上限補正はしない。 */
-const CENTER_FIRE_LIGHT_INTENSITY = 12;
-
-/** 通常フレアの描画順。粒より後、横長フレアより先になる値にする。 */
-const SOURCE_FLARE_RENDER_ORDER = 2;
-
-/** 横長フレアの描画順。粒と通常フレアより後になる値にする。 */
-const NEAR_FLARE_RENDER_ORDER = 3;
-
-/** 画面中央に残る炎の3D座標。Yは床と同じ高さにする。 */
-const CENTER_FIRE_POSITION = new THREE.Vector3(0, GROUND_LEVEL_Y, 0);
-
-/** 炎の表示に使う3種類の画像。 */
-type FireFieldTextures = {
-  /** ぼかした粒と、くっきりした粒の画像。 */
-  particleTextures: FireParticleTextures;
-
-  /** 火元の丸いフレア画像。 */
-  sourceFlareTexture: THREE.Texture;
-
-  /** 画面を横へ伸びるフレア画像。 */
-  nearFlareTexture: THREE.Texture;
-};
-
-/** 飛ぶ火元1つが持つ表示状態と、前フレームの位置。 */
-type FlyingFireSource = FireParticleEmitter & {
-  /** 火元とライトをまとめて動かす入れ物。 */
-  group: THREE.Group;
-
-  /** 速度を求めるために保存する、前フレームの3D座標。 */
-  previousPosition: THREE.Vector3;
-
-  /** 火元と一緒に動く点光源。 */
-  pointLight: THREE.PointLight;
-
-  /** フレアとライトへ掛ける明るさ。0〜1。 */
+const LIGHT = {
+  color: 0xff6622,
+  center: { distance: 1_100, heightOffset: 80, intensity: 12, rateFadeIn: 6 },
+  flying: {
+    heightOffset: 16,
+    rangeDistance: [1_100, 1_140],
+    rangeIntensity: [0.8, 1.1],
+  },
+} as const;
+/** 画面中央に残る炎の位置。Yは床と同じ高さにする。 */
+const POSITION_CENTER = new THREE.Vector3(0, Y_GROUND, 0);
+/** 飛ぶ火元1つが持つ、粒・ライト・前フレームの状態。 */
+type FireSource = ParticleEmitter & {
+  positionPrevious: THREE.Vector3;
+  light: THREE.PointLight;
   brightness: number;
-
-  /** trueの間だけ、個別のライトとフレアを表示する。 */
   isFlying: boolean;
 };
-
-/**
- * sceneへ中央の炎、飛ぶ火元、点光源、フレアを追加し、毎フレームの更新関数を返す。
- * 返した関数には0以上の経過秒を渡し、呼ぶ前にcameraの行列を更新する。
- */
+/** sceneへ炎、点光源、フレアを追加して更新関数を返す。camera行列の更新後に0以上の経過秒を渡す。 */
 export function createFireField(
   scene: THREE.Scene,
   camera: THREE.PerspectiveCamera,
-  textures: FireFieldTextures,
+  textures: TextureSet,
 ) {
-  const sourceFlareMesh = createInstancedBillboard({
-    texture: textures.sourceFlareTexture,
-    maxInstanceCount: FLYING_FIRE_SOURCE_COUNT,
-    renderOrder: SOURCE_FLARE_RENDER_ORDER,
-    // フレアはレンズ内の光なので、3D物体の前後関係では隠さない。
+  const meshFlare = createBillboards({
+    texture: textures.textureFlare,
+    maxInstances: FLIGHT.numSources,
+    renderOrder: FLARE_SOURCE.renderOrder,
+    // depthTest=falseでフレアを常に前面へ描く。
     depthTest: false,
   });
-  const nearFlareMesh = createInstancedBillboard({
-    texture: textures.nearFlareTexture,
-    maxInstanceCount: FLYING_FIRE_SOURCE_COUNT,
-    renderOrder: NEAR_FLARE_RENDER_ORDER,
+  const meshStreak = createBillboards({
+    texture: textures.textureFlareStreak,
+    maxInstances: FLARE_STREAK.maxVisible,
+    renderOrder: FLARE_STREAK.renderOrder,
     depthTest: false,
-    textureVStart: NEAR_FLARE_TEXTURE_V_START,
-    textureVEnd: NEAR_FLARE_TEXTURE_V_END,
+    heightScale: textures.textureFlareStreak.repeat.y,
   });
-  scene.add(sourceFlareMesh, nearFlareMesh);
-
-  const flyingFireSources = Array.from({ length: FLYING_FIRE_SOURCE_COUNT }, () =>
-    createFlyingFireSource(scene),
-  );
-
-  // 待機中の火元ライトは同じ場所へ重なるため、中央の1灯へ明るさをまとめる。
-  const centerPointLight = createFirePointLight(CENTER_FIRE_LIGHT_DISTANCE);
-  centerPointLight.position.set(0, GROUND_LEVEL_Y + CENTER_FIRE_LIGHT_HEIGHT, 0);
-  scene.add(centerPointLight);
-  let centerLightBrightness = 0;
-
-  const updateParticles = createFireParticleSystem(
+  scene.add(meshFlare, meshStreak);
+  const sources = Array.from({ length: FLIGHT.numSources }, () => createSource(scene));
+  // 中央ライトは起動時に点灯し、各火元のライトは飛行中に点灯する。
+  const lightCenter = createLight(LIGHT.center.distance);
+  lightCenter.position.set(0, Y_GROUND + LIGHT.center.heightOffset, 0);
+  scene.add(lightCenter);
+  gsap.to(lightCenter, {
+    intensity: LIGHT.center.intensity,
+    duration: 1 / LIGHT.center.rateFadeIn,
+    ease: "none",
+  });
+  const updateParticles = createParticleSystem(
     scene,
     camera,
-    textures.particleTextures,
-    flyingFireSources,
-    CENTER_FIRE_POSITION,
+    textures.texturesParticles,
+    sources,
+    POSITION_CENTER,
   );
+  // 毎フレーム使うMatrix4、Color、Vector3を共用する。
+  const matrix = new THREE.Matrix4();
+  const color = new THREE.Color();
+  const positionCameraSpace = new THREE.Vector3();
+  const scaleFlare = new THREE.Vector3().setScalar(FLARE_SOURCE.size);
+  const scaleStreak = new THREE.Vector3().setScalar(FLARE_STREAK.size);
 
-  // InstancedMeshへ書く値は使い回し、毎フレームのごみを作らない。
-  const scratchMatrix = new THREE.Matrix4();
-  const scratchScale = new THREE.Vector3();
-  const scratchColor = new THREE.Color();
-  const sourcePositionInCameraSpace = new THREE.Vector3();
+  return (secDelta: number) => {
+    meshFlare.material.opacity = THREE.MathUtils.randFloat(...FLARE_SOURCE.rangeOpacity);
+    meshStreak.material.opacity = THREE.MathUtils.randFloat(...FLARE_STREAK.rangeOpacity);
+    let numStreaks = 0;
+    for (let sourceIndex = 0; sourceIndex < sources.length; sourceIndex += 1) {
+      const source = sources[sourceIndex];
+      updateVelocity(source, secDelta);
 
-  const updateSourceLightsAndFlares = (deltaSeconds: number) => {
-    const sourceFlareMaterial = sourceFlareMesh.material;
-    const nearFlareMaterial = nearFlareMesh.material;
-
-    // 小さな乱数で、炎とライトが完全に静止して見えないようにする。
-    sourceFlareMaterial.opacity = getRandomSourceFlareOpacity();
-    nearFlareMaterial.opacity = getRandomNearFlareOpacity();
-    centerLightBrightness = Math.min(
-      1,
-      centerLightBrightness + deltaSeconds * CENTER_LIGHT_FADE_IN_PER_SECOND,
-    );
-
-    let visibleNearFlareCount = 0;
-
-    for (let sourceIndex = 0; sourceIndex < flyingFireSources.length; sourceIndex += 1) {
-      const source = flyingFireSources[sourceIndex];
-      updateSourceVelocity(source, deltaSeconds);
-
-      // 飛んでいる火元だけ個別ライトを使う。待機中の明るさは中央へ足さない。
-      source.pointLight.visible = source.isFlying;
+      // 飛行状態を個別ライトの表示へ反映する。
+      source.light.visible = source.isFlying;
       if (source.isFlying) {
-        source.pointLight.distance = getRandomFlyingFireLightDistance();
-        source.pointLight.intensity = source.brightness * getRandomFlyingFireLightIntensityScale();
+        source.light.position.copy(source.position);
+        source.light.position.y += LIGHT.flying.heightOffset;
+        source.light.distance = THREE.MathUtils.randFloat(...LIGHT.flying.rangeDistance);
+        source.light.intensity =
+          source.brightness *
+          Math.min(THREE.MathUtils.randFloat(...LIGHT.flying.rangeIntensity), 1);
       }
 
-      // 待機中の火元は中央専用の粒へ任せ、同じフレアが中央で重なるのを防ぐ。
-      scratchColor.setScalar(
-        source.isFlying ? source.brightness * FLYING_SOURCE_FLARE_HDR_BRIGHTNESS : 0,
-      );
-      scratchScale.setScalar(SOURCE_FLARE_WORLD_SIZE);
-      scratchMatrix.compose(source.group.position, camera.quaternion, scratchScale);
-      sourceFlareMesh.setMatrixAt(sourceIndex, scratchMatrix);
-      sourceFlareMesh.setColorAt(sourceIndex, scratchColor);
+      color.setScalar(source.isFlying ? source.brightness * FLARE_SOURCE.brightness : 0);
+      matrix.compose(source.position, camera.quaternion, scaleFlare);
+      meshFlare.setMatrixAt(sourceIndex, matrix);
+      meshFlare.setColorAt(sourceIndex, color);
 
-      // 一部の火元だけを候補にし、近くを高く横切る間だけ横長フレアを出す。
-      sourcePositionInCameraSpace
-        .copy(source.group.position)
-        .applyMatrix4(camera.matrixWorldInverse);
-      const cameraDepth = -sourcePositionInCameraSpace.z;
-      const heightFade = THREE.MathUtils.smoothstep(
-        source.group.position.y,
-        STREAK_FLARE_HEIGHT_FADE_START,
-        STREAK_FLARE_HEIGHT_FADE_END,
-      );
-      const depthFadeIn = THREE.MathUtils.smoothstep(
-        cameraDepth,
-        STREAK_FLARE_DEPTH_FADE_IN_START,
-        STREAK_FLARE_DEPTH_FADE_IN_END,
-      );
-      const depthFadeOut =
-        1 -
-        THREE.MathUtils.smoothstep(
-          cameraDepth,
-          STREAK_FLARE_DEPTH_FADE_OUT_START,
-          STREAK_FLARE_DEPTH_FADE_OUT_END,
-        );
-      const streakFlareBrightness = heightFade * depthFadeIn * depthFadeOut;
-      const shouldShowNearFlare =
-        source.isFlying &&
-        sourceIndex % STREAK_FLARE_CANDIDATE_STEP === 0 &&
-        streakFlareBrightness > 0 &&
-        visibleNearFlareCount < STREAK_FLARE_MAX_VISIBLE_COUNT;
-
-      // 見える大きなフレアを配列の先頭から詰め、残りは描かない。
-      if (shouldShowNearFlare) {
-        scratchColor.setScalar(
-          source.brightness * streakFlareBrightness * NEAR_FLARE_HDR_BRIGHTNESS,
-        );
-        scratchScale.setScalar(NEAR_FLARE_WORLD_SIZE);
-        scratchMatrix.compose(source.group.position, camera.quaternion, scratchScale);
-        nearFlareMesh.setMatrixAt(visibleNearFlareCount, scratchMatrix);
-        nearFlareMesh.setColorAt(visibleNearFlareCount, scratchColor);
-        visibleNearFlareCount += 1;
+      // 飛行中の火元をintervalCandidate間隔で選び、maxVisible件まで距離を調べる。
+      if (
+        !source.isFlying ||
+        sourceIndex % FLARE_STREAK.intervalCandidate !== 0 ||
+        numStreaks >= FLARE_STREAK.maxVisible
+      ) {
+        continue;
       }
+
+      // 高さとカメラ奥行きから横長フレアの明るさを求める。
+      positionCameraSpace.copy(source.position).applyMatrix4(camera.matrixWorldInverse);
+      const depthCamera = -positionCameraSpace.z;
+      const brightnessFlare =
+        THREE.MathUtils.smoothstep(source.position.y, ...FLARE_STREAK.rangeHeight) *
+        THREE.MathUtils.smoothstep(depthCamera, ...FLARE_STREAK.rangeDepthIn) *
+        (1 - THREE.MathUtils.smoothstep(depthCamera, ...FLARE_STREAK.rangeDepthOut));
+      if (brightnessFlare <= 0) continue;
+
+      // 表示する横長フレアをインスタンス番号0から順に書き込む。
+      color.setScalar(source.brightness * brightnessFlare * FLARE_STREAK.brightness);
+      matrix.compose(source.position, camera.quaternion, scaleStreak);
+      meshStreak.setMatrixAt(numStreaks, matrix);
+      meshStreak.setColorAt(numStreaks, color);
+      numStreaks += 1;
     }
 
-    centerPointLight.intensity = centerLightBrightness * CENTER_FIRE_LIGHT_INTENSITY;
-
     // CPUで書き換えた位置と色を、このフレームでGPUへ送る。
-    sourceFlareMesh.instanceMatrix.needsUpdate = true;
-    if (sourceFlareMesh.instanceColor) sourceFlareMesh.instanceColor.needsUpdate = true;
-    nearFlareMesh.count = visibleNearFlareCount;
-    nearFlareMesh.instanceMatrix.needsUpdate = true;
-    if (nearFlareMesh.instanceColor) nearFlareMesh.instanceColor.needsUpdate = true;
-  };
-
-  return (deltaSeconds: number) => {
-    updateSourceLightsAndFlares(deltaSeconds);
-    updateParticles(deltaSeconds);
+    meshFlare.instanceMatrix.needsUpdate = true;
+    meshFlare.instanceColor!.needsUpdate = true;
+    meshStreak.count = numStreaks;
+    meshStreak.instanceMatrix.needsUpdate = true;
+    meshStreak.instanceColor!.needsUpdate = true;
+    updateParticles(secDelta);
   };
 }
-
 /** GSAPで飛ばす1つの火元と、その場所を照らすライトを作る。 */
-function createFlyingFireSource(scene: THREE.Scene): FlyingFireSource {
-  const group = new THREE.Group();
-  group.position.copy(CENTER_FIRE_POSITION);
+function createSource(scene: THREE.Scene): FireSource {
+  const position = POSITION_CENTER.clone();
+  const light = createLight(THREE.MathUtils.randFloat(...LIGHT.flying.rangeDistance));
+  light.position.set(position.x, position.y + LIGHT.flying.heightOffset, position.z);
+  scene.add(light);
 
-  const pointLight = createFirePointLight(getRandomFlyingFireLightDistance());
-  pointLight.position.y = FLYING_FIRE_LIGHT_HEIGHT;
-  group.add(pointLight);
-
-  const source: FlyingFireSource = {
-    group,
-    position: group.position,
+  const source: FireSource = {
+    position,
     velocity: new THREE.Vector3(),
-    previousPosition: group.position.clone(),
-    particleSpawnRate: 0,
-    pointLight,
+    positionPrevious: position.clone(),
+    ratioSpawn: 0,
+    light,
     brightness: 0,
     isFlying: false,
   };
-  scene.add(group);
-  startSourceFlightAnimation(source);
+  startFlight(source);
   return source;
 }
-
-/**
- * 炎の光を広い床まで届ける点光源を作る。
- * distanceは3D空間で0以上。0なら届く距離に上限を付けない。
- */
-function createFirePointLight(distance: number) {
-  const pointLight = new THREE.PointLight(FIRE_LIGHT_COLOR, 0, distance);
-
-  // 通常の距離減衰をなくし、指定距離の手前から消す。
-  pointLight.decay = 0;
-  return pointLight;
+/** decay=0の点光源を作る。光量はdistanceの境界へ近づくほど減り、境界で0になる。 */
+function createLight(distance: number) {
+  return new THREE.PointLight(LIGHT.color, 0, distance, 0);
 }
-
-/** 現在と前の位置から火元の速度を求める。deltaSecondsは0以上の経過秒。 */
-function updateSourceVelocity(source: FlyingFireSource, deltaSeconds: number) {
-  if (!source.isFlying || deltaSeconds <= SOURCE_VELOCITY_DELTA_MIN_SECONDS) {
+/** 前回位置との差分から速度を求める。speedResetThresholdを超える速度は周回開始の位置リセットとして0にする。 */
+function updateVelocity(source: FireSource, secDelta: number) {
+  if (!source.isFlying || secDelta <= FLIGHT.secDeltaMin) {
     source.velocity.set(0, 0, 0);
-    source.previousPosition.copy(source.position);
+    source.positionPrevious.copy(source.position);
     return;
   }
 
-  source.velocity.subVectors(source.position, source.previousPosition).divideScalar(deltaSeconds);
-  source.previousPosition.copy(source.position);
-
-  // 中央へ戻る瞬間は軌跡ではないため、異常に大きな速度を粒へ渡さない。
-  if (source.velocity.length() > SOURCE_TELEPORT_SPEED_WORLD_UNITS_PER_SECOND) {
+  source.velocity.subVectors(source.position, source.positionPrevious).divideScalar(secDelta);
+  source.positionPrevious.copy(source.position);
+  if (source.velocity.lengthSq() > FLIGHT.speedResetThreshold ** 2) {
     source.velocity.set(0, 0, 0);
   }
 }
-
-/** 火元を中央から上へ飛ばし、横へ広げながら床へ落とす動きを繰り返す。 */
-function startSourceFlightAnimation(source: FlyingFireSource) {
-  const sourcePosition = source.group.position;
-  const launchDelaySeconds = getRandomSourceLaunchDelaySeconds();
-  const peakHeight = getRandomSourcePeakHeight();
-  const landingX = getRandomSourceLandingPosition();
-  const landingZ = getRandomSourceLandingPosition();
-
+/** XZ座標を中央から着地点へ移動する。Y座標はCustomBounceで床から最高点へ上がり、同じ飛行時間で床へ戻る。 */
+function startFlight(source: FireSource) {
+  const randomRange = THREE.MathUtils.randFloat;
+  const secDelay = randomRange(...FLIGHT.rangeSecDelay);
+  const secEnd = secDelay + FLIGHT.secFlight;
+  const tweenHorizontal = {
+    x: randomRange(...FLIGHT.rangeLanding),
+    z: randomRange(...FLIGHT.rangeLanding),
+    duration: FLIGHT.secFlight,
+    ease: "power1.out",
+  };
+  const tweenVertical = {
+    y: randomRange(...FLIGHT.rangePeakHeight),
+    duration: FLIGHT.secFlight,
+    ease: EASE_VERTICAL_BOUNCE,
+  };
   gsap
-    .timeline({ repeat: -1, repeatRefresh: true })
+    .timeline({ repeat: -1 })
+    .to(source, { brightness: 1, duration: FLIGHT.secIgnition, ease: "sine.out" }, 0)
+    .set(source, { isFlying: true, ratioSpawn: 1 }, secDelay)
+    .to(source.position, tweenHorizontal, secDelay)
+    .to(source.position, tweenVertical, secDelay)
+    // 着地前に粒の発生割合と火元の明るさを0まで減らす。
     .to(
       source,
-      {
-        brightness: 1,
-        duration: SOURCE_IGNITION_DURATION_SECONDS,
-        ease: "sine.out",
-      },
-      0,
+      { ratioSpawn: 0, duration: FLIGHT.secParticleFade, ease: "power2.in" },
+      secEnd - FLIGHT.secParticleFade,
     )
-    .set(source, { isFlying: true, particleSpawnRate: 1 }, launchDelaySeconds)
-    .to(
-      sourcePosition,
-      {
-        x: landingX,
-        z: landingZ,
-        duration: SOURCE_FLIGHT_DURATION_SECONDS,
-        ease: "power1.out",
-      },
-      launchDelaySeconds,
-    )
-    .to(
-      sourcePosition,
-      {
-        y: peakHeight,
-        duration: SOURCE_FLIGHT_DURATION_SECONDS,
-        ease: SOURCE_VERTICAL_BOUNCE_EASE_NAME,
-      },
-      launchDelaySeconds,
-    )
-    // 尾の粒は急に切らず、飛行が終わる前に新しく出す数を減らす。
     .to(
       source,
-      {
-        particleSpawnRate: 0,
-        duration: SOURCE_PARTICLE_SPAWN_REDUCTION_DURATION_SECONDS,
-        ease: "power2.in",
-      },
-      launchDelaySeconds +
-        SOURCE_FLIGHT_DURATION_SECONDS -
-        SOURCE_PARTICLE_SPAWN_REDUCTION_DURATION_SECONDS,
+      { brightness: 0, duration: FLIGHT.secLightFade, ease: "sine.inOut" },
+      secEnd - FLIGHT.secLightFade,
     )
-    // 飛行が終わる直前だけ暗くし、火元が急に消えたように見せない。
-    .to(
-      source,
-      {
-        brightness: 0,
-        duration: SOURCE_LIGHT_AND_FLARE_FADE_DURATION_SECONDS,
-        ease: "sine.inOut",
-      },
-      launchDelaySeconds +
-        SOURCE_FLIGHT_DURATION_SECONDS -
-        SOURCE_LIGHT_AND_FLARE_FADE_DURATION_SECONDS,
-    )
-    // 次の周回は中央から始め、待機中のライトを中央へまとめる。
-    .set(
-      sourcePosition,
-      { x: 0, y: GROUND_LEVEL_Y, z: 0 },
-      launchDelaySeconds + SOURCE_FLIGHT_DURATION_SECONDS,
-    )
-    .set(
-      source,
-      { brightness: 1, particleSpawnRate: 0, isFlying: false },
-      launchDelaySeconds + SOURCE_FLIGHT_DURATION_SECONDS,
-    );
+    // 着地時に火元を中央へ戻し、次の周回へ入る。
+    .set(source.position, { x: 0, y: Y_GROUND, z: 0 }, secEnd)
+    .set(source, { brightness: 1, ratioSpawn: 0, isFlying: false }, secEnd);
 }

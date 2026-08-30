@@ -1,79 +1,54 @@
 import * as THREE from "three/webgpu";
-import fireParticleBlurredUrl from "../assets/fire_particle.png";
-import fireParticleSharpUrl from "../assets/fire_particle_sharp.png";
-import floorColorUrl from "../assets/floor_diffuse.jpg";
-import floorNormalUrl from "../assets/floor_normal.jpg";
-import floorSpecularUrl from "../assets/floor_specular.jpg";
-import fireFlareUrl from "../assets/lens_frare.png";
-import nearFireFlareUrl from "../assets/lens_frare_active.png";
+import urlFireBlurred from "../assets/fire_particle.png";
+import urlFireSharp from "../assets/fire_particle_sharp.png";
+import urlFloorColor from "../assets/floor_diffuse.jpg";
+import urlFloorNormal from "../assets/floor_normal.jpg";
+import urlFloorSpecular from "../assets/floor_specular.jpg";
+import urlFlare from "../assets/lens_frare.png";
+import urlFlareStreak from "../assets/lens_frare_active.png";
 
-/** 床画像を一辺に並べる回数。0より大きくする。1なら画像を1枚だけ貼り、小数も使える。 */
-const FLOOR_TEXTURE_REPEAT_COUNT = 24;
+/** 床テクスチャの繰り返し回数。0より大きい値で、1が画像1枚分。小数も指定できる。 */
+const NUM_FLOOR_TILES = 24;
+/** loadTexturesの戻り値。床、粒、フレアのTextureを持つ。 */
+export type TextureSet = ReturnType<typeof loadTextures>;
+/** 静的importした画像の読み込みを開始し、Textureを返す。読み込み完了後に画像データが設定される。 */
+export function loadTextures() {
+  const loader = new THREE.TextureLoader();
+  const textureFloorColor = loader.load(urlFloorColor);
+  const textureFloorNormal = loader.load(urlFloorNormal);
+  const textureFloorSpecular = loader.load(urlFloorSpecular);
+  const textureFireBlurred = loader.load(urlFireBlurred);
+  const textureFireSharp = loader.load(urlFireSharp);
+  const textureFlare = loader.load(urlFlare);
+  const textureFlareStreak = loader.load(urlFlareStreak);
+  const texturesFloor = [textureFloorColor, textureFloorNormal, textureFloorSpecular];
+  const texturesParticles = [textureFireBlurred, textureFireSharp] as const;
 
-export type SceneTextures = {
-  /** 床の色を描く画像。 */
-  floorColor: THREE.Texture;
+  // 床の色・炎・フレアはsRGB、法線と反射は数値テクスチャとして読む。
+  for (const texture of [textureFloorColor, ...texturesParticles, textureFlare, textureFlareStreak])
+    texture.colorSpace = THREE.SRGBColorSpace;
 
-  /** 床の細かな凹凸を表す数値画像。 */
-  floorNormal: THREE.Texture;
-
-  /** 床の反射しやすい場所を表す数値画像。 */
-  floorSpecular: THREE.Texture;
-
-  /** ぼかした炎と、くっきりした炎の画像。順番を変えない。 */
-  fireParticles: readonly [blurred: THREE.Texture, sharp: THREE.Texture];
-
-  /** 火元の丸い光を描く画像。 */
-  fireFlare: THREE.Texture;
-
-  /** 画面を横へ伸びる大きな光を描く画像。 */
-  nearFireFlare: THREE.Texture;
-};
-
-/**
- * 静的importした画像の読み込みを始め、設定済みのTextureをすぐ返す。
- * 画像データは読み込みが終わったものからTextureへ入る。
- */
-export function loadSceneTextures(): SceneTextures {
-  const textureLoader = new THREE.TextureLoader();
-  const floorColor = textureLoader.load(floorColorUrl);
-  const floorNormal = textureLoader.load(floorNormalUrl);
-  const floorSpecular = textureLoader.load(floorSpecularUrl);
-  const fireParticles = [
-    textureLoader.load(fireParticleBlurredUrl),
-    textureLoader.load(fireParticleSharpUrl),
-  ] as const;
-  const fireFlare = textureLoader.load(fireFlareUrl);
-  const nearFireFlare = textureLoader.load(nearFireFlareUrl);
-
-  // 人が見る色の画像だけをsRGBとして読む。凹凸と反射の画像は数値データのまま使う。
-  for (const colorTexture of [floorColor, ...fireParticles, fireFlare, nearFireFlare]) {
-    colorTexture.colorSpace = THREE.SRGBColorSpace;
+  // RepeatWrappingで床画像を敷き詰める。
+  for (const texture of texturesFloor) {
+    texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+    texture.repeat.setScalar(NUM_FLOOR_TILES);
   }
 
-  // 床の模様を繰り返し、元画像の荒い質感をぼかさずに残す。
-  for (const floorTexture of [floorColor, floorNormal, floorSpecular]) {
-    floorTexture.wrapS = THREE.RepeatWrapping;
-    floorTexture.wrapT = THREE.RepeatWrapping;
-    floorTexture.repeat.setScalar(FLOOR_TEXTURE_REPEAT_COUNT);
-    floorTexture.generateMipmaps = false;
-    floorTexture.minFilter = THREE.NearestFilter;
-    floorTexture.magFilter = THREE.NearestFilter;
+  // minFilterはNearestFilter、generateMipmapsはfalse。床と炎の輪郭を残す。
+  for (const texture of [...texturesFloor, ...texturesParticles]) {
+    texture.generateMipmaps = false;
+    texture.minFilter = texture.magFilter = THREE.NearestFilter;
   }
 
-  // 2種類の炎の粒は、元画像の輪郭をぼかさずに使う。
-  for (const fireParticle of fireParticles) {
-    fireParticle.generateMipmaps = false;
-    fireParticle.minFilter = THREE.NearestFilter;
-    fireParticle.magFilter = THREE.NearestFilter;
-  }
-
+  // 横線を含む帯を切り出し、上下を反転して横長フレアに使う。
+  textureFlareStreak.offset.y = 1;
+  textureFlareStreak.repeat.y = 336 / 512 - 1;
   return {
-    floorColor,
-    floorNormal,
-    floorSpecular,
-    fireParticles,
-    fireFlare,
-    nearFireFlare,
+    textureFloorColor,
+    textureFloorNormal,
+    textureFloorSpecular,
+    texturesParticles,
+    textureFlare,
+    textureFlareStreak,
   };
 }
