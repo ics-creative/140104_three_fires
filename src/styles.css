@@ -1,7 +1,7 @@
 body {
   margin: 0;
   overflow: hidden;
-  background: #000; /* WebGPU初期化前の背景色。 */
+  background: black;
   #scene {
     display: block;
     cursor: grab;
@@ -12,15 +12,15 @@ body {
   }
   .wireframe-toggle {
     position: fixed;
-    inset: auto 16px 16px auto;
+    inset: auto 8px 8px auto;
     display: flex;
     gap: 4px;
     align-items: center;
-    padding: 8px 12px;
+    padding: 2px 4px;
     color: #fff;
     font: 10px sans-serif;
     accent-color: #ff6a2a;
     background: rgb(0 0 0 / 70%);
-    border-radius: 4px;
+    border-radius: 6px;
   }
 }
