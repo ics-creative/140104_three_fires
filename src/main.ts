@@ -2,6 +2,7 @@ import * as THREE from "three/webgpu";
 import { createFireField } from "./fire/fire-field";
 import { createCameraController } from "./scene/camera-controller";
 import { createFloor } from "./scene/floor";
+import { createSceneRenderPipeline } from "./scene/render-pipeline";
 import { createSceneRenderer, resizeRenderer } from "./scene/renderer";
 import { loadSceneTextures } from "./scene/textures";
 import { setupWireframeToggle } from "./scene/wireframe-toggle";
@@ -60,6 +61,7 @@ const updateFireField = createFireField(scene, camera, {
   nearFlareTexture: sceneTextures.nearFireFlare,
 });
 setupWireframeToggle(scene, wireframeToggle);
+const renderPipeline = createSceneRenderPipeline(renderer, scene, camera);
 const frameTimer = new THREE.Timer();
 
 function resizeViewport() {
@@ -75,7 +77,7 @@ function renderFrame() {
   // フレアの向きと距離判定に今のカメラ行列を使うため、炎より先に更新する。
   camera.updateMatrixWorld();
   updateFireField(deltaSeconds);
-  renderer.render(scene, camera);
+  renderPipeline.render();
 }
 
 resizeViewport();

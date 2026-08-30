@@ -33,7 +33,7 @@ export function createSceneRenderer(canvas: HTMLCanvasElement) {
     outputType: THREE.HalfFloatType,
   });
 
-  // 明るさを圧縮せず、対応するHDR画面へそのまま渡す。
+  // 白より明るい値を、対応するHDR画面へ渡す。
   renderer.outputColorSpace = ExtendedSRGBColorSpace;
 
   // 近くにあるライトだけを区画ごとに調べ、全ライトの計算を毎画素で行わない。
